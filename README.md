@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/Thymeleaf-005F0F?style=flat-square&logo=thymeleaf&logoColor=white"/>
 </p>
 
-**동서대학교 데이터베이스 설계 8조 팀 프로젝트** · 2023.12 · 팀원 5명
+**동서대학교 데이터베이스 설계 8조 팀 프로젝트** · 2023.12 · 팀원 4명
 
 ---
 
