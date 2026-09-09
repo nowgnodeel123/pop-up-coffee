@@ -154,6 +154,237 @@ com.db8.popupcoffee
 
 ---
 
+## 🗂 ERD
+
+엔티티가 25개가 넘어 도메인 단위로 나누어 표기했습니다. 세 다이어그램은 `MERCHANT_CONTRACT`, `SPACE_RENTAL_AGREEMENT`, `MEMBER`를 통해 연결됩니다.
+
+### 1. 예약 · 대여 · 정산 (핵심 흐름)
+
+```mermaid
+erDiagram
+    MERCHANT_CONTRACT ||--o{ FIXED_RESERVATION : "신청"
+    MERCHANT_CONTRACT ||--o{ FLEXIBLE_RESERVATION : "신청"
+    MERCHANT_CONTRACT ||--o{ SPACE_RENTAL_AGREEMENT : "체결"
+    FLEXIBLE_RESERVATION ||--o{ DESIRED_DATE : "희망 날짜"
+    FLEXIBLE_RESERVATION ||--o| FIXED_RESERVATION : "결제 시 전환"
+    FIXED_RESERVATION ||--o| SPACE_RENTAL_AGREEMENT : "확정 시 생성"
+    SPACE ||--o{ SPACE_RENTAL_AGREEMENT : "배정"
+    SPACE ||--o{ FLEXIBLE_RESERVATION : "임시 배정"
+    SPACE_RENTAL_AGREEMENT ||--o{ PRODUCT_ORDER : "매출 발생"
+    SPACE_RENTAL_AGREEMENT ||--o{ SETTLEMENT : "정산"
+    SPACE_RENTAL_AGREEMENT ||--o{ DEPOSIT_HISTORY : "보증금 차감"
+    MEMBER ||--o{ PRODUCT_ORDER : "주문"
+
+    SPACE {
+        bigint id PK
+        varchar number UK "공간 번호"
+    }
+    FIXED_RESERVATION {
+        bigint id PK
+        bigint merchant_contract_id FK
+        bigint space_rental_agreement_id FK
+        enum status "FIXED / CANCELED"
+        date start_date
+        date end_date
+        bigint rental_fee
+        bigint rental_deposit
+        boolean from_flexible_reservation
+    }
+    FLEXIBLE_RESERVATION {
+        bigint id PK
+        bigint merchant_contract_id FK
+        bigint temporal_space_id FK
+        bigint fixed_reservation_id FK
+        date availability_start_date
+        date availability_end_date
+        bigint duration "null 이면 기간 무관"
+        date temporal_rental_start_date
+        date temporal_rental_end_date
+        date deadline
+        enum status "WAITING → SPACE_FIXED → RESERVATION_FIXED"
+    }
+    DESIRED_DATE {
+        bigint id PK
+        bigint flexible_reservation_id FK
+        date date "반드시 포함되어야 할 날짜"
+    }
+    SPACE_RENTAL_AGREEMENT {
+        bigint id PK
+        bigint merchant_contract_id FK
+        bigint space_id FK
+        double revenue_share_percentage "등급별 수수료율"
+        bigint rental_fee
+        bigint rental_deposit
+        bigint remaining_rental_deposit
+        date start_date
+        date end_date
+        enum rental_status "BEFORE_USE → IN_USE → BEFORE_SETTLEMENT → COMPLETED"
+    }
+    PRODUCT_ORDER {
+        bigint id PK
+        bigint member_id FK
+        bigint space_rental_agreement_id FK
+        bigint total_payment
+        bigint used_point
+        enum status "COMPLETED / REFUNDED"
+    }
+    SETTLEMENT {
+        bigint id PK
+        bigint space_rental_agreement_id FK
+        bigint settled_revenue "수수료 차감 후 정산액"
+        bigint refunded_deposit
+    }
+    DEPOSIT_HISTORY {
+        bigint id PK
+        bigint space_rental_agreement_id FK
+        bigint amount
+        varchar reason
+    }
+```
+
+### 2. 업체 · 등급 · 제재 · 요금 정책
+
+```mermaid
+erDiagram
+    BUSINESS_TYPE ||--o{ MERCHANT : "업종"
+    MERCHANT ||--o{ MERCHANT_CONTRACT : "계약"
+    MERCHANT ||--o{ GRADE_SCORE_HISTORY : "등급 점수 변동"
+    MERCHANT ||--o{ WARNING_HISTORY : "경고"
+    MERCHANT ||--o{ BLACKLIST_HISTORY : "블랙리스트"
+    WARNING_HISTORY ||--o{ SANCTION_REVIEW : "이의 제기"
+    BLACKLIST_HISTORY ||--o{ SANCTION_REVIEW : "이의 제기"
+
+    MERCHANT {
+        bigint id PK
+        bigint business_type_id FK
+        varchar name
+        varchar username UK
+        varchar password
+        int grade_score "등급 산정 기준 점수"
+        int warning_count
+        boolean blacklist
+        boolean first_rental_overed "첫 대여 보너스 지급 여부"
+    }
+    MERCHANT_CONTRACT {
+        bigint id PK
+        bigint merchant_id FK
+        date expire_at
+        varchar contact_manager
+        varchar account_number "정산 계좌"
+    }
+    GRADE_SCORE_HISTORY {
+        bigint id PK
+        bigint merchant_id FK
+        int changes
+        varchar reason "첫 대여 보너스 / 대여 종료"
+    }
+    WARNING_HISTORY {
+        bigint id PK
+        bigint merchant_id FK
+        varchar reason
+        boolean increasing "부과 / 해제"
+    }
+    BLACKLIST_HISTORY {
+        bigint id PK
+        bigint merchant_id FK
+        boolean blacklisted
+        varchar reason
+    }
+    SANCTION_REVIEW {
+        bigint id PK
+        bigint warning_history_id FK
+        bigint blacklist_history_id FK
+        enum review_type
+        varchar content
+    }
+    DATE_INFO {
+        bigint id PK
+        date date UK
+        enum seasonality_level "HIGHEST / HIGH / NORMAL / LOW"
+        boolean holiday
+    }
+    FIXED_DATE_INFO {
+        bigint id PK
+        smallint month
+        smallint day
+        boolean lunar "음력 여부"
+        enum seasonality_level
+    }
+```
+
+> `DATE_INFO`는 다른 테이블과 FK로 연결되지 않고, **대여 기간의 날짜로 조회해 요금을 합산**하는 방식으로 사용됩니다. `FIXED_DATE_INFO`는 매년 반복되는 고정 공휴일을 정의합니다.
+
+### 3. 회원 · 설문 · 문의
+
+```mermaid
+erDiagram
+    MEMBER ||--o{ POINT_HISTORY : "포인트 변동"
+    MEMBER ||--o{ MEMBER_CREDIT_CARD : "결제 수단"
+    MEMBER ||--o{ SURVEY_RESPONSE : "응답"
+    MEMBER ||--o| MEMBER : "추천인"
+    SURVEY ||--o{ SURVEY_ITEM : "문항"
+    SURVEY ||--o{ SURVEY_RESPONSE : "응답"
+    SURVEY_ITEM ||--o{ SURVEY_ITEM_SELECTED : "선택됨"
+    SURVEY_RESPONSE ||--o{ SURVEY_ITEM_SELECTED : "선택 내역"
+    INQUIRY_CATEGORY ||--o{ INQUIRY : "분류"
+    MERCHANT ||--o{ INQUIRY : "작성"
+    INQUIRY ||--o{ INQUIRY_COMMENT : "답변"
+
+    MEMBER {
+        bigint id PK
+        varchar username UK
+        varchar password
+        varchar nickname
+        enum member_grade "BRONZE / SILVER / GOLD"
+        int point
+        datetime last_surveyed "설문 중복 참여 방지"
+        bigint recommending_member_id FK
+    }
+    POINT_HISTORY {
+        bigint id PK
+        bigint member_id FK
+        int changes
+        varchar reason
+    }
+    SURVEY {
+        bigint id PK
+        int year
+        int month "월 단위 설문"
+    }
+    SURVEY_ITEM {
+        bigint id PK
+        bigint survey_id FK
+        varchar name
+    }
+    SURVEY_RESPONSE {
+        bigint id PK
+        bigint member_id FK
+        bigint survey_id FK
+    }
+    SURVEY_ITEM_SELECTED {
+        bigint id PK
+        bigint item_id FK
+        bigint survey_response_id FK
+        varchar additional_comment "기타 의견"
+    }
+    INQUIRY {
+        bigint id PK
+        bigint category_id FK
+        bigint merchant_id FK
+        varchar title
+        text content
+        boolean faq "FAQ 공개 여부"
+    }
+    INQUIRY_COMMENT {
+        bigint id PK
+        bigint inquiry_id FK
+        text content
+        enum writer "MERCHANT / ADMIN"
+    }
+```
+
+---
+
 ## 🔍 핵심 구현
 
 ### 1. 함수형 인터페이스로 표현한 성수기 요금 정책
@@ -218,6 +449,67 @@ public SpaceRentalStatus next() {
 long revenueSettle = (long) (완료된_주문_합계 * (100 - rental.getRevenueSharePercentage()) / 100);
 int scoreChanges = (int) (days * SCORE_CHANGES_PER_DAY + totalRevenue / REVENUE_FOR_ONE_SCORE);
 ```
+
+---
+
+## 🧩 트러블슈팅
+
+담당했던 성수기 요금 관리 기능에서 겪은 문제들입니다.
+
+### 1. 지정한 기간의 마지막 날 요금이 계산되지 않던 문제
+
+**증상** — 12월 20일부터 25일까지를 성수기로 지정했는데, 25일만 일반 요금으로 계산됐습니다. 연 단위 날짜 정보를 생성할 때도 12월 31일이 항상 누락됐습니다.
+
+**원인** — `LocalDate.datesUntil()`이 **종료일을 제외하는(end-exclusive)** 메서드라는 점을 놓쳤습니다. 사용자가 입력한 종료일은 당연히 포함되어야 하는데, 스트림이 그 전날까지만 생성하고 있었습니다.
+
+```java
+// 문제 코드 — 12/25 지정 시 12/24까지만 생성됨
+request.startDate().datesUntil(request.endDate())
+
+// 수정
+request.startDate().datesUntil(request.endDate().plusDays(1L))
+```
+
+**배운 점** — 날짜 범위를 다루는 API는 시작·종료 경계 포함 여부가 제각각이라, 기간 관련 로직은 **경계값부터 확인하는 습관**이 필요하다는 걸 체감했습니다. 같은 실수가 연 단위 생성 로직(`getAllDatesInYear`)에도 있어 함께 수정했습니다.
+
+### 2. 날짜 정보가 없는 달로 이동하면 달력이 통째로 깨지던 문제
+
+**증상** — 관리자 달력에서 아직 성수기를 지정하지 않은 달로 넘어가면, 그 달만 비는 게 아니라 **달력 전체가 렌더링되지 않았습니다.**
+
+**원인** — 서버에서 받은 날짜 정보를 `연도 → 월 → 일` 3단계 객체로 변환해 사용했는데, 해당 연도나 월의 데이터 자체가 없으면 중간 객체가 `undefined`가 되어 접근 시점에 예외가 발생했습니다. 렌더링 반복문 안에서 예외가 터지니 이후 날짜가 전부 그려지지 않았습니다.
+
+```javascript
+// 문제 코드 — 중간 단계가 없으면 TypeError
+dailyDay(year, month, i, convertedDateInfos[year][month][i]);
+
+// 수정 — 단계별로 존재 여부를 확인하고 undefined를 그대로 넘김
+let yearData  = convertedDateInfos[year];
+let monthData = yearData ? yearData[month] : undefined;
+let dateData  = monthData ? monthData[i] : undefined;
+dailyDay(year, month, i, dateData);
+```
+
+`dailyDay()`는 인자가 `undefined`여도 기본 스타일로 그리도록 되어 있어, 데이터가 없는 날은 자연스럽게 일반 요금 날짜로 표시됩니다.
+
+**배운 점** — "데이터가 항상 있다"는 전제로 짠 코드가 실제로는 **빈 상태가 기본값**이었습니다. 중첩 구조를 조회할 때는 각 단계의 부재를 정상 케이스로 다뤄야 한다는 걸 알게 됐습니다.
+
+### 3. 성수기와 공휴일을 한 칸에 동시에 표시할 수 없던 문제
+
+**증상** — 달력의 각 날짜에 성수기 등급을 배경색으로 칠했는데, **공휴일 표시를 덧입힐 방법이 없었습니다.** 12월 25일처럼 성수기이면서 공휴일인 날은 둘 중 하나만 보였습니다.
+
+**원인** — 색상을 인라인 `style="background-color: red"`로 직접 지정하고 있었습니다. 값이 하나뿐이라 두 정보를 겹칠 수 없는 구조였습니다. 또한 서버 응답 DTO(`DateInfoResponse`)에 공휴일 여부 자체가 빠져 있어 화면에서 알 수도 없었습니다.
+
+**해결** — 응답 DTO에 `holiday` 필드를 추가하고, 인라인 스타일 대신 **CSS 클래스를 조합**하도록 바꿨습니다.
+
+```javascript
+// 성수기 등급 → 클래스, 공휴일이면 클래스를 덧붙임
+let colorClass = 'highest';           // 배경색 담당
+if (level.holiday) colorClass += ' holiday';   // 테두리·마커 담당
+```
+
+배경색은 성수기 클래스가, 테두리 강조는 공휴일 클래스가 담당하게 나누어 두 정보가 한 칸에 함께 보이도록 했습니다.
+
+**배운 점** — 표현을 인라인 스타일에 묶으면 정보가 늘어날 때마다 구조를 갈아엎어야 합니다. **표시할 정보의 축이 여러 개면 스타일도 축별로 분리**해야 한다는 걸 배웠습니다.
 
 ---
 
